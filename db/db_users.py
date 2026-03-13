@@ -58,3 +58,53 @@ class UserRepo:
         async with self.pool.acquire() as conn:
             # Выполняем запрос с передачей значений параметров
             await conn.execute(sql, *parameters.values(), user_id)
+
+    async def update_user_activity(self, user_id: int, activity_increment: int = 1):
+        """
+        Обновляет уровень активности пользователя.
+        """
+        sql = """
+            UPDATE users
+            SET activity_level = activity_level + $1, last_active_date = CURRENT_DATE
+            WHERE user_id = $2;
+        """
+        async with self.pool.acquire() as conn:
+            await conn.execute(sql, activity_increment, user_id)
+
+    async def update_user_rank(self, user_id: int, new_rank: str):
+        """
+        Обновляет звание пользователя.
+        """
+        sql = "UPDATE users SET rank = $1 WHERE user_id = $2;"
+        async with self.pool.acquire() as conn:
+            await conn.execute(sql, new_rank, user_id)
+
+    async def update_external_activity_score(self, user_id: int, score_increment: int):
+        """
+        Обновляет оценку внешней активности пользователя.
+        """
+        sql = "UPDATE users SET external_activity_score = external_activity_score + $1 WHERE user_id = $2;"
+        async with self.pool.acquire() as conn:
+            await conn.execute(sql, score_increment, user_id)
+
+    async def get_user_profile(self, user_id: int) -> Optional[asyncpg.Record]:
+        """
+        Получает данные профиля пользователя по user_id.
+        Возвращает Record с информацией для отображения в профиле.
+        """
+        sql = """
+            SELECT user_id, username, karma, activity_level, rank,
+                   registration_date, external_activity_score, last_active_date
+            FROM users WHERE user_id = $1;
+        """
+        async with self.pool.acquire() as conn:
+            return await conn.fetchrow(sql, user_id)
+
+    async def get_user_by_username(self, username: str) -> Optional[asyncpg.Record]:
+        """
+        Получает данные пользователя по username.
+        Возвращает Record с информацией о пользователе.
+        """
+        sql = "SELECT * FROM users WHERE username = $1;"
+        async with self.pool.acquire() as conn:
+            return await conn.fetchrow(sql, username)

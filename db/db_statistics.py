@@ -65,3 +65,30 @@ class StatisticsRepo:
         sql = "UPDATE statistics SET snowball_throws = 0, snowball_hits = 0, snowball_dodges = 0;"
         async with self.pool.acquire() as conn:
             await conn.execute(sql)
+
+    async def increment_internal_activity(self, user_id: int, increment: int = 1):
+        """
+        Увеличивает счетчик внутренней активности пользователя.
+        """
+        sql = "UPDATE statistics SET internal_activity_count = internal_activity_count + $1 WHERE user_id = $2;"
+        async with self.pool.acquire() as conn:
+            await conn.execute(sql, increment, user_id)
+
+    async def increment_external_activity(self, user_id: int, increment: int = 1):
+        """
+        Увеличивает счетчик внешней активности пользователя.
+        """
+        sql = "UPDATE statistics SET external_activity_count = external_activity_count + $1 WHERE user_id = $2;"
+        async with self.pool.acquire() as conn:
+            await conn.execute(sql, increment, user_id)
+
+    async def get_user_activities(self, user_id: int) -> Optional[asyncpg.Record]:
+        """
+        Получает данные о внутренней и внешней активности пользователя.
+        """
+        sql = """
+            SELECT internal_activity_count, external_activity_count
+            FROM statistics WHERE user_id = $1;
+        """
+        async with self.pool.acquire() as conn:
+            return await conn.fetchrow(sql, user_id)

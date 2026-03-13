@@ -41,7 +41,11 @@ async def create_tables(pool: asyncpg.Pool):
                id_referrer BIGINT DEFAULT 0,
                registration_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                premium_date TIMESTAMP,
-               sub_my_freelancer_notes BOOLEAN DEFAULT false
+               sub_my_freelancer_notes BOOLEAN DEFAULT false,
+               activity_level INTEGER DEFAULT 0,
+               rank TEXT DEFAULT 'Новичок',
+               last_active_date DATE DEFAULT CURRENT_DATE,
+               external_activity_score INTEGER DEFAULT 0
                );
            ''')
 
@@ -90,7 +94,9 @@ async def create_tables(pool: asyncpg.Pool):
                count_received_wisdoms INTEGER DEFAULT 0,
                snowball_throws INTEGER DEFAULT 0,
                snowball_hits INTEGER DEFAULT 0,
-               snowball_dodges INTEGER DEFAULT 0
+               snowball_dodges INTEGER DEFAULT 0,
+               internal_activity_count INTEGER DEFAULT 0,
+               external_activity_count INTEGER DEFAULT 0
            );
            """)
         # Сразу добавляем строку для общей статистики (user_id = 1)
@@ -100,6 +106,14 @@ async def create_tables(pool: asyncpg.Pool):
         await add_column_if_not_exists(conn, "statistics", "snowball_throws", "INTEGER DEFAULT 0")
         await add_column_if_not_exists(conn, "statistics", "snowball_hits", "INTEGER DEFAULT 0")
         await add_column_if_not_exists(conn, "statistics", "snowball_dodges", "INTEGER DEFAULT 0")
+
+        # Добавляем новые поля для активности, если их нет
+        await add_column_if_not_exists(conn, "users", "activity_level", "INTEGER DEFAULT 0")
+        await add_column_if_not_exists(conn, "users", "rank", "TEXT DEFAULT 'Новичок'")
+        await add_column_if_not_exists(conn, "users", "last_active_date", "DATE DEFAULT CURRENT_DATE")
+        await add_column_if_not_exists(conn, "users", "external_activity_score", "INTEGER DEFAULT 0")
+        await add_column_if_not_exists(conn, "statistics", "internal_activity_count", "INTEGER DEFAULT 0")
+        await add_column_if_not_exists(conn, "statistics", "external_activity_count", "INTEGER DEFAULT 0")
 
         # --- Таблица settings ---
         await conn.execute("""

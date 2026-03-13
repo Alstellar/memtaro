@@ -14,6 +14,7 @@ from db.db_statistics import StatisticsRepo
 # Наши сервисы
 from app.services.prediction_service import process_meme_prediction, process_wisdom_prediction
 from app.services.safe_sender import animate_prediction, animate_wisdom
+from app.services.user_service import get_profile_service
 
 router = Router()
 # Ограничиваем работу этого роутера только личными сообщениями
@@ -36,6 +37,23 @@ async def mem_prediction_handler(
     """
     Обработчик запроса на мем (через кнопку меню или команду /mem).
     """
+    # Получаем ProfileService
+    profile_service = get_profile_service(user_repo, stats_repo)
+
+    # Обновляем активность пользователя
+    user_id = message.from_user.id
+    await profile_service.update_user_activity(user_id)
+
+    # Обновляем юзернейм, если он изменился
+    username = message.from_user.username
+    if username:
+        current_user = await user_repo.get_user(user_id)
+        if current_user and current_user.get("username") != username:
+            await user_repo.update_user_profile_parameters(user_id, username=username)
+
+    # Увеличиваем внутреннюю активность
+    await profile_service.increment_internal_activity(user_id)
+
     # 1. Запускаем анимацию (UI)
     await animate_prediction(message)
 
@@ -100,6 +118,23 @@ async def wisdom_prediction_handler(
     """
     Обработчик запроса на мудрость (через кнопку меню или команду /wisdom).
     """
+    # Получаем ProfileService
+    profile_service = get_profile_service(user_repo, stats_repo)
+
+    # Обновляем активность пользователя
+    user_id = message.from_user.id
+    await profile_service.update_user_activity(user_id)
+
+    # Обновляем юзернейм, если он изменился
+    username = message.from_user.username
+    if username:
+        current_user = await user_repo.get_user(user_id)
+        if current_user and current_user.get("username") != username:
+            await user_repo.update_user_profile_parameters(user_id, username=username)
+
+    # Увеличиваем внутреннюю активность
+    await profile_service.increment_internal_activity(user_id)
+
     await animate_wisdom(message)
 
     await process_wisdom_prediction(

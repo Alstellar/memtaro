@@ -9,6 +9,7 @@ from app.config import BotSettings
 from db.db_users import UserRepo
 from db.db_predicts import PredictRepo
 from db.db_statistics import StatisticsRepo
+from .profile_service import ProfileService
 
 
 async def is_user_premium(user_id: int, user_repo: UserRepo) -> bool:
@@ -40,4 +41,11 @@ async def ensure_user_records(
     stats_bd = await stats_repo.get_statistics_entry(user_id)
     if stats_bd is None:
         await stats_repo.add_statistics_entry(user_id)
+
+
+def get_profile_service(user_repo: UserRepo, stats_repo: StatisticsRepo) -> ProfileService:
+    """
+    Возвращает экземпляр ProfileService.
+    """
+    return ProfileService(user_repo, stats_repo)
 
