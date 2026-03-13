@@ -9,13 +9,13 @@ from aiogram.fsm.context import FSMContext
 from aiogram.enums import ChatType
 from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter, TelegramBadRequest
 
-from app.config import BotSettings
+from app.config import settings
 from app.fsm_states import Form
 from db.db_users import UserRepo
 
 router = Router()
 router.message.filter(F.chat.type == ChatType.PRIVATE)
-router.message.filter(lambda msg: msg.from_user.id in BotSettings().ADMIN_IDS)
+router.message.filter(lambda msg: msg.from_user.id in settings.bot.ADMIN_IDS)
 
 
 # ================= Вспомогательная функция (Локальная) =================
@@ -188,24 +188,20 @@ async def execute_mass_mailing(callback: CallbackQuery, state: FSMContext, bot: 
     source_chat_id = data.get("mailing_chat_id")
     admin_id = callback.from_user.id
 
-    user_ids = await user_repo.get_all_user_ids()
-    count_total = len(user_ids)
+    count_total = await user_repo.count_users()
+    sendable_user_ids = await user_repo.get_sendable_user_ids()
+    count_skipped = max(0, count_total - len(sendable_user_ids))
     count_ok = 0
-    count_fail = 0
+    count_fail = count_skipped
 
     # 3. Отправляем начальный отчет и сохраняем его ID для редактирования
     report_text = f"🚀 Рассылка началась!\nОбработано: 0/{count_total}"
     report_msg = await callback.message.answer(report_text)
 
     # 4. Основной цикл рассылки
-    for idx, uid in enumerate(user_ids, start=1):
-        # 4.1. Проверка флага can_send_msg
-        user = await user_repo.get_user(uid)
-        if user and not user.get("can_send_msg", True):
-            count_fail += 1
-            continue
-
-        # 4.2. Копирование сообщения
+    processed = count_skipped
+    for idx, uid in enumerate(sendable_user_ids, start=1):
+        # 4.1. Копирование сообщения
         success = await _safe_copy_message(
             bot=bot,
             chat_id=uid,
@@ -219,11 +215,13 @@ async def execute_mass_mailing(callback: CallbackQuery, state: FSMContext, bot: 
         else:
             count_fail += 1
 
-        # 4.3. Динамический отчет (каждые 50 пользователей)
-        if idx % 50 == 0 or idx == count_total:
+        processed = count_skipped + idx
+
+        # 4.2. Динамический отчет (каждые 50 пользователей)
+        if processed % 50 == 0 or processed == count_total:
             report_text_current = (
                 f"⏱️ Рассылка в процессе...\n\n"
-                f"Обработано: {idx}/{count_total}\n"
+                f"Обработано: {processed}/{count_total}\n"
                 f"✅ Успешно: {count_ok}\n"
                 f"🚫 Не доставлено: {count_fail}"
             )
@@ -235,10 +233,10 @@ async def execute_mass_mailing(callback: CallbackQuery, state: FSMContext, bot: 
                     text=report_text_current
                 )
             except TelegramBadRequest:
-                # Игнорируем, если текст не изменился (часто бывает, если idx % 50 == 0)
+                # Игнорируем, если текст не изменился
                 pass
 
-        # 4.4. Пауза для снижения нагрузки
+        # 4.3. Пауза для снижения нагрузки
         await asyncio.sleep(0.05)
 
     # 5. Финальный отчет

@@ -15,20 +15,12 @@ from db.db_bot_images import BotImageRepo  # Для мемов/мудрости
 from db.db_chats import ChatRepo  # Для мемов/мудрости
 
 # --- Импорт Сервисных Функций ---
-from app.services.snowball_service import process_snowball_throw
 from app.services.prediction_service import process_group_meme, process_group_wisdom
-from handlers.common.snowball_stats import snowball_stats_handler
-from handlers.common.snowball_top import snowtop_command
-from handlers.common.snowball_info import snow_info_handler
 
 # Список триггеров (команд и текста), которые нужно обрабатывать
 # Важно: Все команды должны быть в нижнем регистре
-SNOWBALL_TRIGGERS = {"/snowball", "снежок", "кинуть снежок", "❄️", "🌨"}
 MEM_TRIGGERS = {"/mem"}
 WISDOM_TRIGGERS = {"/wisdom"}
-SNOWSTATS_TRIGGERS = {"/snowstats"}
-SNOWTOP_TRIGGERS = {"/snowtop"}
-SNOW_INFO_TRIGGERS = {"/snow_info"}
 
 router = Router()
 # Фильтр: только группы/супергруппы
@@ -41,7 +33,7 @@ router.message.filter(F.text | F.caption)
 async def activity_orchestrator(
         message: Message,
         bot: Bot,
-        # Репозитории для Activity и Snowball (общее)
+        # Репозитории для общей активности
         activity_repo: ActivityRepo,
         user_repo: UserRepo,
         stats_repo: StatisticsRepo,
@@ -77,34 +69,8 @@ async def activity_orchestrator(
 
     # 3. Проверяем и вызываем команду
 
-    # --- СНЕЖОК ---
-    if command_text in SNOWBALL_TRIGGERS:
-        await process_snowball_throw(message=message, bot=bot, user_repo=user_repo, stats_repo=stats_repo,
-                                     settings_repo=settings_repo, activity_repo=activity_repo)
-        return
-
-    # --- ИНФО О СНЕЖКАХ (/snow_info) ---
-    elif command_text in SNOW_INFO_TRIGGERS:
-        await snow_info_handler(message=message, bot=bot, settings_repo=settings_repo, user_repo=user_repo)
-        return
-
-    # --- СТАТИСТИКА (/snowstats) ---
-    elif command_text in SNOWSTATS_TRIGGERS:
-        # ⚠️ ВАЖНО: Передаем аргументы, как если бы это был обычный хэндлер.
-        await snowball_stats_handler(message=message, bot=bot, stats_repo=stats_repo)
-        return
-
-    # --- ТОПЫ (/snowtop) ---
-    elif command_text in SNOWTOP_TRIGGERS:
-        # ⚠️ ВАЖНО: Хэндлер /snowtop принимает CommandObject, но здесь его нет.
-        # Мы должны вызвать его так, чтобы он не упал, или передать пустой CommandObject.
-        # Поскольку снегтоп не использует CommandObject.args, мы можем просто вызвать его.
-        await snowtop_command(message=message, stats_repo=stats_repo)
-        return
-
-
     # --- МЕМ (/mem) ---
-    elif command_text in MEM_TRIGGERS:
+    if command_text in MEM_TRIGGERS:
         await process_group_meme(
             bot=bot, chat_id=chat_id, user_id=user_id,
             reply_to_message_id=message.message_id,
@@ -117,7 +83,7 @@ async def activity_orchestrator(
         return
 
     # --- МУДРОСТЬ (/wisdom) ---
-    elif command_text in WISDOM_TRIGGERS:
+    if command_text in WISDOM_TRIGGERS:
         await process_group_wisdom(
             bot=bot, chat_id=chat_id, user_id=user_id,
             reply_to_message_id=message.message_id,

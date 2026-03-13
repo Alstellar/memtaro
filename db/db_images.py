@@ -1,6 +1,16 @@
 import asyncpg
 from typing import Optional, Any
 
+ALLOWED_IMAGE_UPDATE_FIELDS = {
+    "file_id",
+    "in_bot_collection",
+    "file_path",
+    "category_animals",
+    "category_cinema",
+    "user_id",
+    "watch_month",
+    "watch_all",
+}
 
 class ImageRepo:
     def __init__(self, pool: asyncpg.Pool):
@@ -8,8 +18,8 @@ class ImageRepo:
 
     async def add_image(self, file_id: str, in_bot_collection: bool, file_path: str, user_id: int) -> Optional[int]:
         """
-        Добавляет новое изображение.
-        Возвращает image_id нового изображения или None, если оно уже существует.
+        Р”РѕР±Р°РІР»СЏРµС‚ РЅРѕРІРѕРµ РёР·РѕР±СЂР°Р¶РµРЅРёРµ.
+        Р’РѕР·РІСЂР°С‰Р°РµС‚ image_id РЅРѕРІРѕРіРѕ РёР·РѕР±СЂР°Р¶РµРЅРёСЏ РёР»Рё None, РµСЃР»Рё РѕРЅРѕ СѓР¶Рµ СЃСѓС‰РµСЃС‚РІСѓРµС‚.
         """
         sql = """
               INSERT INTO images (file_id, in_bot_collection, file_path, user_id)
@@ -17,12 +27,12 @@ class ImageRepo:
             RETURNING image_id; \
               """
         async with self.pool.acquire() as conn:
-            # fetchval вернет image_id или None, если ON CONFLICT сработал
+            # fetchval РІРµСЂРЅРµС‚ image_id РёР»Рё None, РµСЃР»Рё ON CONFLICT СЃСЂР°Р±РѕС‚Р°Р»
             return await conn.fetchval(sql, file_id, in_bot_collection, file_path, user_id)
 
     async def get_image(self, image_id: int) -> Optional[asyncpg.Record]:
         """
-        Получает данные изображения по image_id.
+        РџРѕР»СѓС‡Р°РµС‚ РґР°РЅРЅС‹Рµ РёР·РѕР±СЂР°Р¶РµРЅРёСЏ РїРѕ image_id.
         """
         sql = "SELECT * FROM images WHERE image_id = $1;"
         async with self.pool.acquire() as conn:
@@ -30,7 +40,7 @@ class ImageRepo:
 
     async def get_image_by_file_id(self, file_id: str) -> Optional[int]:
         """
-        Получает image_id по file_id.
+        РџРѕР»СѓС‡Р°РµС‚ image_id РїРѕ file_id.
         """
         sql = "SELECT image_id FROM images WHERE file_id = $1;"
         async with self.pool.acquire() as conn:
@@ -38,7 +48,7 @@ class ImageRepo:
 
     async def get_random_image(self) -> Optional[asyncpg.Record]:
         """
-        Получение случайного изображения из коллекции бота.
+        РџРѕР»СѓС‡РµРЅРёРµ СЃР»СѓС‡Р°Р№РЅРѕРіРѕ РёР·РѕР±СЂР°Р¶РµРЅРёСЏ РёР· РєРѕР»Р»РµРєС†РёРё Р±РѕС‚Р°.
         """
         sql = """
               SELECT * \
@@ -51,14 +61,14 @@ class ImageRepo:
 
     async def get_random_image_by_category(self, category_column: str) -> Optional[asyncpg.Record]:
         """
-        Получение случайного изображения по категории.
-        ВНИМАНИЕ: category_column должна быть безопасной (без SQL-инъекций).
+        РџРѕР»СѓС‡РµРЅРёРµ СЃР»СѓС‡Р°Р№РЅРѕРіРѕ РёР·РѕР±СЂР°Р¶РµРЅРёСЏ РїРѕ РєР°С‚РµРіРѕСЂРёРё.
+        Р’РќРРњРђРќРР•: category_column РґРѕР»Р¶РЅР° Р±С‹С‚СЊ Р±РµР·РѕРїР°СЃРЅРѕР№ (Р±РµР· SQL-РёРЅСЉРµРєС†РёР№).
         """
-        # Простая проверка безопасности, что это одно из известных нам полей
+        # РџСЂРѕСЃС‚Р°СЏ РїСЂРѕРІРµСЂРєР° Р±РµР·РѕРїР°СЃРЅРѕСЃС‚Рё, С‡С‚Рѕ СЌС‚Рѕ РѕРґРЅРѕ РёР· РёР·РІРµСЃС‚РЅС‹С… РЅР°Рј РїРѕР»РµР№
         if category_column not in ("category_animals", "category_cinema"):
-            raise ValueError(f"Недопустимое имя столбца для категории: {category_column}")
+            raise ValueError(f"РќРµРґРѕРїСѓСЃС‚РёРјРѕРµ РёРјСЏ СЃС‚РѕР»Р±С†Р° РґР»СЏ РєР°С‚РµРіРѕСЂРёРё: {category_column}")
 
-        # Используем f-string ТОЛЬКО для проверенного имени столбца
+        # РСЃРїРѕР»СЊР·СѓРµРј f-string РўРћР›Р¬РљРћ РґР»СЏ РїСЂРѕРІРµСЂРµРЅРЅРѕРіРѕ РёРјРµРЅРё СЃС‚РѕР»Р±С†Р°
         sql = f"""
             SELECT * FROM images 
             WHERE in_bot_collection = true AND {category_column} = true
@@ -70,7 +80,7 @@ class ImageRepo:
 
     async def get_images_statistics(self, admin_id: int) -> dict[str, int]:
         """
-        Возвращает словарь со статистикой по изображениям (total и user).
+        Р’РѕР·РІСЂР°С‰Р°РµС‚ СЃР»РѕРІР°СЂСЊ СЃРѕ СЃС‚Р°С‚РёСЃС‚РёРєРѕР№ РїРѕ РёР·РѕР±СЂР°Р¶РµРЅРёСЏРј (total Рё user).
         """
         sql_total = "SELECT COUNT(*) FROM images WHERE in_bot_collection = true;"
         sql_user = "SELECT COUNT(*) FROM images WHERE in_bot_collection = true AND user_id <> $1;"
@@ -82,7 +92,7 @@ class ImageRepo:
 
     async def get_images_statistics_by_user_id(self, user_id: int) -> int:
         """
-        Возвращает количество изображений для конкретного пользователя.
+        Р’РѕР·РІСЂР°С‰Р°РµС‚ РєРѕР»РёС‡РµСЃС‚РІРѕ РёР·РѕР±СЂР°Р¶РµРЅРёР№ РґР»СЏ РєРѕРЅРєСЂРµС‚РЅРѕРіРѕ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ.
         """
         sql = "SELECT COUNT(*) FROM images WHERE in_bot_collection = true AND user_id = $1;"
         async with self.pool.acquire() as conn:
@@ -90,7 +100,7 @@ class ImageRepo:
 
     async def get_user_mem_views(self, user_id: int) -> dict[str, int]:
         """
-        Возвращает сумму просмотров мемов (month, all) для пользователя.
+        Р’РѕР·РІСЂР°С‰Р°РµС‚ СЃСѓРјРјСѓ РїСЂРѕСЃРјРѕС‚СЂРѕРІ РјРµРјРѕРІ (month, all) РґР»СЏ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ.
         """
         sql = """
               SELECT COALESCE(SUM(watch_month), 0) AS total_watch_month,
@@ -104,7 +114,7 @@ class ImageRepo:
 
     async def get_overall_image_views(self) -> dict[str, int]:
         """
-        Возвращает суммарные просмотры мемов (month, all) для всей коллекции.
+        Р’РѕР·РІСЂР°С‰Р°РµС‚ СЃСѓРјРјР°СЂРЅС‹Рµ РїСЂРѕСЃРјРѕС‚СЂС‹ РјРµРјРѕРІ (month, all) РґР»СЏ РІСЃРµР№ РєРѕР»Р»РµРєС†РёРё.
         """
         sql = """
               SELECT COALESCE(SUM(watch_month), 0) AS total_watch_month,
@@ -118,8 +128,15 @@ class ImageRepo:
 
     async def update_images_parameters(self, image_id: int, **parameters: Any):
         """
-        Обновляет указанные поля для изображения.
+        Updates selected image fields.
         """
+        if not parameters:
+            return
+
+        invalid_fields = set(parameters) - ALLOWED_IMAGE_UPDATE_FIELDS
+        if invalid_fields:
+            raise ValueError(f"Unsupported image fields for update: {sorted(invalid_fields)}")
+
         set_clause = ", ".join([f"{param} = ${i + 1}" for i, param in enumerate(parameters.keys())])
         sql = f"""
             UPDATE images
@@ -131,22 +148,22 @@ class ImageRepo:
 
     async def delete_image_by_id(self, image_id: int):
         """
-        Удаляет изображение по image_id.
+        РЈРґР°Р»СЏРµС‚ РёР·РѕР±СЂР°Р¶РµРЅРёРµ РїРѕ image_id.
         """
         sql = "DELETE FROM images WHERE image_id = $1;"
         async with self.pool.acquire() as conn:
             await conn.execute(sql, image_id)
 
     async def check_image_exists_by_path(self, file_path: str) -> bool:
-        """Проверяет, есть ли уже картинка с таким путем."""
+        """РџСЂРѕРІРµСЂСЏРµС‚, РµСЃС‚СЊ Р»Рё СѓР¶Рµ РєР°СЂС‚РёРЅРєР° СЃ С‚Р°РєРёРј РїСѓС‚РµРј."""
         sql = "SELECT 1 FROM images WHERE file_path = $1"
         async with self.pool.acquire() as conn:
             return bool(await conn.fetchval(sql, file_path))
 
     async def add_local_image(self, file_path: str, user_id: int = 0) -> int:
         """
-        Добавляет локальный файл в базу.
-        file_id оставляем NULL (он обновится при первой отправке).
+        Р”РѕР±Р°РІР»СЏРµС‚ Р»РѕРєР°Р»СЊРЅС‹Р№ С„Р°Р№Р» РІ Р±Р°Р·Сѓ.
+        file_id РѕСЃС‚Р°РІР»СЏРµРј NULL (РѕРЅ РѕР±РЅРѕРІРёС‚СЃСЏ РїСЂРё РїРµСЂРІРѕР№ РѕС‚РїСЂР°РІРєРµ).
         """
         sql = """
               INSERT INTO images (file_path, in_bot_collection, user_id, file_id)
@@ -157,8 +174,8 @@ class ImageRepo:
 
     async def increment_image_views(self, image_id: int):
         """
-        Увеличивает счетчики просмотров (месяц и всё время) на +1.
-        COALESCE защищает от случая, если в поле был NULL (превращает его в 0).
+        РЈРІРµР»РёС‡РёРІР°РµС‚ СЃС‡РµС‚С‡РёРєРё РїСЂРѕСЃРјРѕС‚СЂРѕРІ (РјРµСЃСЏС† Рё РІСЃС‘ РІСЂРµРјСЏ) РЅР° +1.
+        COALESCE Р·Р°С‰РёС‰Р°РµС‚ РѕС‚ СЃР»СѓС‡Р°СЏ, РµСЃР»Рё РІ РїРѕР»Рµ Р±С‹Р» NULL (РїСЂРµРІСЂР°С‰Р°РµС‚ РµРіРѕ РІ 0).
         """
         sql = """
               UPDATE images
@@ -171,7 +188,7 @@ class ImageRepo:
 
     async def get_top_memes_month(self, limit: int = 10) -> list[asyncpg.Record]:
         """
-        Возвращает топ мемов по просмотрам за месяц.
+        Р’РѕР·РІСЂР°С‰Р°РµС‚ С‚РѕРї РјРµРјРѕРІ РїРѕ РїСЂРѕСЃРјРѕС‚СЂР°Рј Р·Р° РјРµСЃСЏС†.
         """
         sql = """
               SELECT image_id, user_id, watch_month
@@ -185,7 +202,7 @@ class ImageRepo:
 
     async def reset_monthly_views(self):
         """
-        Сбрасывает счетчик просмотров за месяц у всех картинок.
+        РЎР±СЂР°СЃС‹РІР°РµС‚ СЃС‡РµС‚С‡РёРє РїСЂРѕСЃРјРѕС‚СЂРѕРІ Р·Р° РјРµСЃСЏС† Сѓ РІСЃРµС… РєР°СЂС‚РёРЅРѕРє.
         """
         sql = "UPDATE images SET watch_month = 0;"
         async with self.pool.acquire() as conn:
@@ -193,7 +210,7 @@ class ImageRepo:
 
     async def get_top_memes_all_time(self, limit: int = 10) -> list[asyncpg.Record]:
         """
-        Возвращает топ мемов по просмотрам за все время.
+        Р’РѕР·РІСЂР°С‰Р°РµС‚ С‚РѕРї РјРµРјРѕРІ РїРѕ РїСЂРѕСЃРјРѕС‚СЂР°Рј Р·Р° РІСЃРµ РІСЂРµРјСЏ.
         """
         sql = """
               SELECT image_id, user_id, watch_all

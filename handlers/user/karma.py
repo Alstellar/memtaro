@@ -28,7 +28,6 @@ async def karma_info_handler(
     # 1. ПОЛУЧЕНИЕ ЦЕН И МНОЖИТЕЛЕЙ (СПИСАНИЕ)
     p_meme = await settings_repo.get_setting_value("price_repeat_meme", 5)
     p_wisdom = await settings_repo.get_setting_value("price_repeat_wisdom", 5)
-    p_snowball = await settings_repo.get_setting_value("price_snowball_throw", 5)
 
     # 2. ПОЛУЧЕНИЕ БОНУСОВ (ЗАРАБОТОК)
     b_ref_signup = await settings_repo.get_setting_value("bonus_ref_signup", 5)
@@ -68,7 +67,7 @@ async def karma_info_handler(
         "--- 💸 <b>На что можно потратить карму:</b> ---\n"
         f"• -{p_meme}✨ за получение повторного мем-предсказания в течение дня\n"
         f"• -{p_wisdom}✨ за получение повторной мудрости в течение дня\n"
-        f"• -{p_snowball}✨ за игру в Снежки\n\n"
+        "\n"
 
         "Спасибо, что вы с нами!"
     )

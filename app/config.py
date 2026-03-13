@@ -1,6 +1,8 @@
 # app/config.py
+import json
+
+from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import SecretStr
 
 
 class DBSettings(BaseSettings):
@@ -47,6 +49,28 @@ class BotSettings(BaseSettings):
     # ЮКасса
     YOOKASSA_SHOP_ID: int
     YOOKASSA_SECRET_KEY: SecretStr
+
+    @field_validator("ADMIN_IDS", mode="before")
+    @classmethod
+    def parse_admin_ids(cls, value):
+        """
+        Supports both CSV format ("1,2,3") and JSON array ("[1,2,3]").
+        """
+        if isinstance(value, list):
+            return [int(item) for item in value]
+
+        if isinstance(value, str):
+            raw = value.strip()
+            if not raw:
+                return []
+
+            if raw.startswith("[") and raw.endswith("]"):
+                parsed = json.loads(raw)
+                return [int(item) for item in parsed]
+
+            return [int(item.strip()) for item in raw.split(",") if item.strip()]
+
+        return value
 
 
 class Settings:

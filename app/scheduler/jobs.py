@@ -5,18 +5,15 @@ from loguru import logger
 from aiogram import Bot
 from aiogram.enums import ChatMemberStatus
 import asyncpg
-from typing import Union, Optional
 
 from app.config import BotSettings
 from app.services.safe_sender import safe_send_message
-from app.services.user_service import is_user_premium
 
 # Импортируем классы репозиториев
 from db.db_users import UserRepo
 from db.db_predicts import PredictRepo
 from db.db_images import ImageRepo
 from db.db_settings import SettingsRepo
-from db.db_statistics import StatisticsRepo
 
 
 async def send_daily_reminder(bot: Bot, pool: asyncpg.Pool, bot_settings: BotSettings):  # 👈 Добавлен bot_settings
@@ -28,19 +25,15 @@ async def send_daily_reminder(bot: Bot, pool: asyncpg.Pool, bot_settings: BotSet
     predict_repo = PredictRepo(pool)
     # settings_repo = SettingsRepo(pool) # Не используется напрямую в цикле
 
-    user_ids = await user_repo.get_all_user_ids()
+    user_ids = await user_repo.get_sendable_user_ids()
     today = datetime.now().date()
+    predicted_today_ids = await predict_repo.get_user_ids_with_predict_date(today)
 
     count_sent = 0
     count_skip = 0
 
     for uid in user_ids:
-        user = await user_repo.get_user(uid)
-        if not user or not user.get("can_send_msg", True):
-            continue
-
-        predict = await predict_repo.get_predicts(uid)
-        if predict and predict.get('last_predict_date') == today:
+        if uid in predicted_today_ids:
             continue
 
         text_msg = (
@@ -49,8 +42,6 @@ async def send_daily_reminder(bot: Bot, pool: asyncpg.Pool, bot_settings: BotSet
             "Введите /mem, чтобы получить ваше персональное мем-предсказание 🔮\n\n"
             "Введите /wisdom, чтобы получить мудрость дня 🧙‍♂️\n\n"
             "Введите /menu, чтобы открыть главное меню 🏠\n\n"
-            "🔥 А еще у нас стартовала <b>Снежная битва!!!</b>\n\n"
-            "Подробнее - /snow_info\n\n"
             "🌟 Хорошего дня! 🌟"
         )
 
@@ -78,20 +69,9 @@ async def send_daily_karma_bonus(bot: Bot, pool: asyncpg.Pool, bot_settings: Bot
     logger.info("Начисление ежедневных бонусов Premium...")
     user_repo = UserRepo(pool)
     settings_repo = SettingsRepo(pool)
-    user_ids = await user_repo.get_all_user_ids()
-
     bonus = await settings_repo.get_setting_value("bonus_premium_daily_karma", 50)
-
-    count = 0
-    total_karma = 0
-
-    for uid in user_ids:
-        if await is_user_premium(uid, user_repo):
-            user = await user_repo.get_user(uid)
-            new_karma = user["karma"] + bonus
-            await user_repo.update_user_profile_parameters(uid, karma=new_karma)
-            count += 1
-            total_karma += bonus
+    count = await user_repo.add_karma_to_active_premium_users(bonus)
+    total_karma = count * bonus
 
     report = (
         "<b>Ежедневное начисление кармы (Premium)</b>\n\n"
@@ -108,17 +88,13 @@ async def send_daily_channel_bonus(bot: Bot, pool: asyncpg.Pool, bot_settings: B
     logger.info("Проверка подписок на канал...")
     user_repo = UserRepo(pool)
     settings_repo = SettingsRepo(pool)
-    user_ids = await user_repo.get_all_user_ids()
-
     bonus = await settings_repo.get_setting_value("bonus_channel_sub", 1)
 
     count_ok = 0
     count_unsub = 0
 
-    for uid in user_ids:
-        user = await user_repo.get_user(uid)
-        if not user or not user.get("sub_my_freelancer_notes", False):
-            continue
+    for user in await user_repo.get_channel_bonus_candidates():
+        uid = user["user_id"]
 
         try:
             member = await bot.get_chat_member(bot_settings.CHANNEL_ID, uid)
@@ -149,23 +125,16 @@ async def send_daily_channel_bonus(bot: Bot, pool: asyncpg.Pool, bot_settings: B
 
 async def send_monthly_rating(bot: Bot, pool: asyncpg.Pool, bot_settings: BotSettings):
     """
-    1-го числа месяца: Топ мемов, награды авторам, сброс счетчика,
-    НАГРАДЫ ЗА СНЕЖНУЮ БИТВУ.
+    1-го числа месяца: Топ мемов, награды авторам и сброс счетчика просмотров.
     """
     logger.info("Подведение итогов месяца...")
     image_repo = ImageRepo(pool)
     user_repo = UserRepo(pool)
-    stats_repo = StatisticsRepo(pool)
     settings_repo = SettingsRepo(pool)
 
     # --- 1. Динамические настройки ---
     limit = await settings_repo.get_setting_value("limit_top_memes", 10)
     meme_bonus = await settings_repo.get_setting_value("bonus_meme_top_karma_per_meme", 100)
-
-    # Настройки для снежков
-    snow_limit = await settings_repo.get_setting_value("snowball_top_limit", 25)
-    snow_max = await settings_repo.get_setting_value("snowball_top_max_reward", 1000)
-    snow_min = await settings_repo.get_setting_value("snowball_top_min_reward", 100)
 
     # --- 2. Логика наград за ТОП МЕМОВ ---
 
@@ -200,55 +169,6 @@ async def send_monthly_rating(bot: Bot, pool: asyncpg.Pool, bot_settings: BotSet
 
     await safe_send_message(bot, bot_settings.LOG_GROUP_ID, "\n\n".join(report_lines))
 
-    # --- 3. Логика наград за ТОП СНЕЖКОВ ---
-
-    if snow_limit > 1:
-        step = (snow_max - snow_min) / (snow_limit - 1)
-    else:
-        step = 0
-
-    snow_leaderboards = {
-        "snowball_throws": "☄️ Настойчивость (Броски)",
-        "snowball_hits": "🎯 Меткость (Попадания)",
-        "snowball_dodges": "💨 Ловкость (Увороты)"
-    }
-
-    full_snow_report = ["\n\n---", "<b>❄️ РЕЙТИНГ СНЕЖНОЙ БИТВЫ (НАГРАДЫ)</b>"]
-
-    for sort_col, title in snow_leaderboards.items():
-        top_players = await stats_repo.get_top_snowballers(sort_col, limit=snow_limit)
-
-        full_snow_report.append(f"\n🏆 <b>ТОП {snow_limit} ПО {title}</b>")
-
-        for rank, rec in enumerate(top_players, start=1):
-            player_id = rec["user_id"]
-
-            raw_reward = snow_max - (rank - 1) * step
-            reward = int(round(raw_reward / 10) * 10)
-
-            player_user = await user_repo.get_user(player_id)
-            if player_user:
-                new_karma = player_user["karma"] + reward
-                await user_repo.update_user_profile_parameters(player_id, karma=new_karma)
-
-                player_name = f"@{rec['username']}" if rec['username'] else f"User {player_id}"
-
-                full_snow_report.append(
-                    f"   #{rank}. {player_name} ({rec['score']} очков) -> +{reward}✨"
-                )
-
-                await safe_send_message(
-                    bot, player_id,
-                    f"👑 <b>Успешный успех!</b>\n\nВы заняли #{rank} место в рейтинге «{title}» <b>Снежной битвы!</b>\n\nНачислено <b>+{reward}</b> ✨ кармы.",
-                    user_repo
-                )
-
-    await safe_send_message(bot, bot_settings.LOG_GROUP_ID, "\n".join(full_snow_report))
-
-    # --- 4. Сброс счетчиков ---
+    # --- 3. Сброс счетчиков ---
     await image_repo.reset_monthly_views()
     logger.info("Счетчики просмотров за месяц сброшены.")
-
-    # 👇 СБРОС СТАТИСТИКИ СНЕЖКОВ
-    await stats_repo.reset_snowball_stats()
-    logger.info("Счетчики снежной битвы сброшены.")

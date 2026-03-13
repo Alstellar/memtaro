@@ -17,14 +17,12 @@ BACK_BUTTON_TEXT = "↩️ Назад (Меню цен)"
 
 # 1. СТАТИЧЕСКАЯ КАРТА: Кнопка -> Список ключей в БД
 SETTING_GROUPS = {
-    "1️⃣ Цены на Услуги (Карма)": ["price_repeat_meme", "price_repeat_wisdom", "price_snowball_throw"],
+    "1️⃣ Цены на Услуги (Карма)": ["price_repeat_meme", "price_repeat_wisdom"],
     "2️⃣ Базовые Награды": ["bonus_daily_prediction", "bonus_daily_wisdom", "bonus_meme_approval", "bonus_ref_signup",
                             "bonus_ref_prediction", "bonus_ref_wisdom", "bonus_channel_sub", "bonus_chat_activity"],
     "3️⃣ Премиум Коэфф.": ["mult_premium_karma", "bonus_premium_daily_karma", "bonus_premium_activation",
                            "bonus_author_per_view"],
-    "4️⃣ Рейтинги и RNG": ["prob_crit_hit", "prob_crit_miss", "prob_hit_base", "bonus_crit_hit",
-                           "snowball_top_max_reward", "snowball_top_min_reward", "snowball_top_limit",
-                           "limit_top_memes", "min_active_users_for_random"],
+    "4️⃣ Рейтинги и RNG": ["limit_top_memes"],
     "5️⃣ Маркетплейс (RUB)": ["pack_100_karma_price", "pack_500_karma_price", "pack_1000_karma_price", "sub_30d_price"],
 }
 

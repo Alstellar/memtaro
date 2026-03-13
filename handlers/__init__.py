@@ -19,12 +19,8 @@ from .admin import mailing as admin_mailing_router
 from .admin import settings as admin_settings_router
 
 from .group import prediction as group_prediction_router
-from .group import snowball as group_snowball_router
 from .group import activity_tracker as group_activity_router
 
-from .common import snowball_stats as common_snowball_router
-from .common import snowball_top as common_snowball_top_router
-from .common import snowball_info as common_snowball_info_router
 
 
 def register_all_handlers(dp: Dispatcher):
@@ -55,11 +51,6 @@ def register_all_handlers(dp: Dispatcher):
 
     main_router.include_router(group_activity_router.router)
     main_router.include_router(group_prediction_router.router)
-    main_router.include_router(group_snowball_router.router)
-
-    main_router.include_router(common_snowball_router.router)
-    main_router.include_router(common_snowball_top_router.router)
-    main_router.include_router(common_snowball_info_router.router)
 
 
     # Регистрируем "супер-роутер" в Dispatcher

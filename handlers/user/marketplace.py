@@ -1,5 +1,6 @@
 # handlers/user/marketplace.py
 import asyncio
+import asyncpg
 from aiogram import Router, F, Bot
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, \
     CallbackQuery
@@ -7,7 +8,7 @@ from aiogram.enums import ChatType
 
 from app.config import settings
 from app.services.safe_sender import safe_send_message
-from app.services.payment_service import create_yookassa_payment, check_payment_loop
+from app.services.payment_service import create_yookassa_payment, spawn_payment_check
 from db.db_payments import PaymentRepo
 from db.db_users import UserRepo
 from db.db_statistics import StatisticsRepo
@@ -83,10 +84,12 @@ async def buy_karma_menu(message: Message, bot: Bot, user_repo,
 async def process_karma_rub_payment(
         message: Message,
         bot: Bot,
+        pool: asyncpg.Pool,
         user_repo: UserRepo,
         payment_repo: PaymentRepo,
         stats_repo: StatisticsRepo,
-        settings_repo: SettingsRepo
+        settings_repo: SettingsRepo,
+        payment_task_registry: set[asyncio.Task] | None = None,
 ):
     user_id = message.from_user.id
 
@@ -108,13 +111,21 @@ async def process_karma_rub_payment(
     pay_url, payment_id = await create_yookassa_payment(price_rub, description, user_id)
 
     payload = f"karma_{amount_karma}"
-    await payment_repo.add_payment(
+    payment_row_id = await payment_repo.add_payment(
         user_id=user_id,
         amount=price_rub,
         payload=payload,
         payment_id=payment_id,
         status="pending"
     )
+    if payment_row_id is None:
+        await safe_send_message(
+            bot,
+            user_id,
+            "Платеж уже зарегистрирован. Проверьте статус оплаты чуть позже.",
+            user_repo,
+        )
+        return
 
     try:
         await bot.send_message(
@@ -138,10 +149,19 @@ async def process_karma_rub_payment(
         reply_markup=kb
     )
 
-    asyncio.create_task(check_payment_loop(
-        bot, payment_id, user_id, payload, price_rub,
-        payment_repo, user_repo, stats_repo, settings_repo
-    ))
+    spawn_payment_check(
+        bot=bot,
+        payment_id=payment_id,
+        user_id=user_id,
+        payload=payload,
+        amount=price_rub,
+        payment_repo=payment_repo,
+        user_repo=user_repo,
+        stats_repo=stats_repo,
+        settings_repo=settings_repo,
+        pool=pool,
+        task_registry=payment_task_registry,
+    )
 
 
 # --- ОБРАБОТКА ПОДПИСКИ (РУБЛИ) ---
@@ -172,10 +192,12 @@ async def buy_subscription_menu(message: Message, bot: Bot, user_repo, settings_
 async def process_premium_rub_payment(
         callback: CallbackQuery,
         bot: Bot,
+        pool: asyncpg.Pool,
         user_repo: UserRepo,
         payment_repo: PaymentRepo,
         stats_repo: StatisticsRepo,
-        settings_repo: SettingsRepo
+        settings_repo: SettingsRepo,
+        payment_task_registry: set[asyncio.Task] | None = None,
 ):
     await callback.answer()
     user_id = callback.from_user.id
@@ -186,13 +208,21 @@ async def process_premium_rub_payment(
     pay_url, payment_id = await create_yookassa_payment(price_rub, description, user_id)
 
     payload = "sub_30"
-    await payment_repo.add_payment(
+    payment_row_id = await payment_repo.add_payment(
         user_id=user_id,
         amount=price_rub,
         payload=payload,
         payment_id=payment_id,
         status="pending"
     )
+    if payment_row_id is None:
+        await safe_send_message(
+            bot,
+            user_id,
+            "Платеж уже зарегистрирован. Проверьте статус оплаты чуть позже.",
+            user_repo,
+        )
+        return
 
     try:
         await bot.send_message(
@@ -216,7 +246,16 @@ async def process_premium_rub_payment(
         reply_markup=kb
     )
 
-    asyncio.create_task(check_payment_loop(
-        bot, payment_id, user_id, payload, price_rub,
-        payment_repo, user_repo, stats_repo, settings_repo
-    ))
+    spawn_payment_check(
+        bot=bot,
+        payment_id=payment_id,
+        user_id=user_id,
+        payload=payload,
+        amount=price_rub,
+        payment_repo=payment_repo,
+        user_repo=user_repo,
+        stats_repo=stats_repo,
+        settings_repo=settings_repo,
+        pool=pool,
+        task_registry=payment_task_registry,
+    )
