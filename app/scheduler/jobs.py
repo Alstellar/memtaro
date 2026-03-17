@@ -39,10 +39,12 @@ async def send_daily_reminder(bot: Bot, pool: asyncpg.Pool, bot_settings: BotSet
         text_msg = (
             "Доброе утро! 🌞\n\n"
             "Готовы узнать, что сегодня для Вас приготовила судьба?\n\n"
-            "Введите /mem, чтобы получить ваше персональное мем-предсказание 🔮\n\n"
-            "Введите /wisdom, чтобы получить мудрость дня 🧙‍♂️\n\n"
-            "Введите /menu, чтобы открыть главное меню 🏠\n\n"
-            "🌟 Хорошего дня! 🌟"
+            "• /mem — мем-предсказание 🔮\n"
+            "• /wisdom — мудрость дня 🧙‍♂️\n"
+            "• /menu — главное меню 🏠\n\n"
+            "🪬 Хотите больше мистики? Загляните в "
+            "<b><a href=\"https://t.me/rus_tarot_bot\">Таро | Гороскоп</a></b>.\n\n"
+            "🌟 Удачного дня! 🌟"
         )
 
         if await safe_send_message(bot, uid, text_msg, user_repo):

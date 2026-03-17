@@ -1,4 +1,5 @@
 import asyncio
+from uuid import uuid4
 
 import asyncpg
 from aiogram import Bot, F, Router
@@ -38,7 +39,10 @@ KARMA_PACKAGES_MAP = {
 }
 
 TAROT_PRODUCT_BUTTON = "🪬 Карма для @rus_tarot_bot"
-TAROT_TRANSFER_CALLBACK = "transfer_tarot_1000"
+TAROT_TRANSFER_REQUEST_CALLBACK = "transfer_tarot_1000"
+TAROT_TRANSFER_CONFIRM_CALLBACK = "transfer_tarot_1000_confirm"
+TAROT_TRANSFER_CANCEL_CALLBACK = "transfer_tarot_1000_cancel"
+TAROT_TRANSFER_PAYMENT_PAYLOAD = f"transfer_tarot_{TRANSFER_AMOUNT_TO_TAROT}"
 
 
 @router.message(F.text == "🏪 Маркетплейс")
@@ -101,19 +105,23 @@ async def buy_karma_menu(
 @router.message(F.text == TAROT_PRODUCT_BUTTON)
 async def tarot_transfer_product_card(message: Message, bot: Bot, user_repo: UserRepo):
     """Показывает карточку товара для переноса 1000 кармы в @rus_tarot_bot."""
+    user = await user_repo.get_user(message.from_user.id)
+    current_karma = int(user["karma"]) if user and user["karma"] is not None else 0
+
     text = (
-        "<b>🪬 Карма для @rus_tarot_bot</b>\n\n"
+        "🪬 Карма для @rus_tarot_bot\n\n"
         "Вы можете перенести карму из текущего бота в бота "
-        "<a href='https://t.me/rus_tarot_bot'>Таро | Гороскоп</a>.\n"
+        "<b><a href='https://t.me/rus_tarot_bot'>Таро | Гороскоп</a></b>.\n\n"
         "В нем карма используется для получения раскладов Таро.\n\n"
-        f"Доступно для перевода: <b>{TRANSFER_AMOUNT_TO_TAROT} ✨</b>."
+        f"Минимум для перевода: {TRANSFER_AMOUNT_TO_TAROT} ✨.\n"
+        f"Ваша Карма: <b>{current_karma} ✨</b>"
     )
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
                     text=f"Перенести {TRANSFER_AMOUNT_TO_TAROT} ✨",
-                    callback_data=TAROT_TRANSFER_CALLBACK,
+                    callback_data=TAROT_TRANSFER_REQUEST_CALLBACK,
                 )
             ]
         ]
@@ -121,17 +129,91 @@ async def tarot_transfer_product_card(message: Message, bot: Bot, user_repo: Use
     await safe_send_message(bot, message.chat.id, text, user_repo, reply_markup=kb)
 
 
-@router.callback_query(F.data == TAROT_TRANSFER_CALLBACK)
-async def transfer_tarot_karma_callback(
+@router.callback_query(F.data == TAROT_TRANSFER_REQUEST_CALLBACK)
+async def transfer_tarot_karma_request_callback(
+    callback: CallbackQuery,
+    bot: Bot,
+    user_repo: UserRepo,
+):
+    """Запрашивает подтверждение перед переносом кармы."""
+    await callback.answer()
+    user_id = callback.from_user.id
+    user = await user_repo.get_user(user_id)
+    current_karma = int(user["karma"]) if user and user["karma"] is not None else 0
+
+    text = (
+        "⚠️ <b>Подтвердите перевод кармы</b>\n\n"
+        f"Будет списано: <b>{TRANSFER_AMOUNT_TO_TAROT} ✨</b>\n"
+        "Куда: <b>@rus_tarot_bot</b>\n"
+        f"Ваш текущий баланс: <b>{current_karma} ✨</b>\n\n"
+        "Подтвердить перевод?"
+    )
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ Подтвердить", callback_data=TAROT_TRANSFER_CONFIRM_CALLBACK),
+                InlineKeyboardButton(text="❌ Отмена", callback_data=TAROT_TRANSFER_CANCEL_CALLBACK),
+            ]
+        ]
+    )
+
+    if callback.message:
+        try:
+            await callback.message.edit_text(text, reply_markup=kb)
+            return
+        except Exception:
+            pass
+
+    await safe_send_message(bot, user_id, text, user_repo, reply_markup=kb)
+
+
+@router.callback_query(F.data == TAROT_TRANSFER_CANCEL_CALLBACK)
+async def transfer_tarot_karma_cancel_callback(callback: CallbackQuery):
+    """Отменяет перевод кармы после запроса подтверждения."""
+    await callback.answer("Перевод отменен.")
+    if callback.message:
+        try:
+            await callback.message.edit_text("Перевод кармы отменен.")
+        except Exception:
+            pass
+
+
+@router.callback_query(F.data == TAROT_TRANSFER_CONFIRM_CALLBACK)
+async def transfer_tarot_karma_confirm_callback(
     callback: CallbackQuery,
     bot: Bot,
     pool: asyncpg.Pool,
     tarot_pool: asyncpg.Pool | None,
     user_repo: UserRepo,
+    payment_repo: PaymentRepo,
 ):
-    """Выполняет перенос фиксированных 1000 кармы между проектами."""
-    await callback.answer()
+    """Выполняет перенос фиксированных 1000 кармы между проектами после подтверждения."""
+    await callback.answer("Выполняю перевод...")
     user_id = callback.from_user.id
+    request_marker = callback.message.message_id if callback.message else uuid4().hex
+    transfer_payment_id = f"transfer_tarot_{user_id}_{request_marker}"
+
+    payment_row_id = await payment_repo.add_payment(
+        user_id=user_id,
+        amount=TRANSFER_AMOUNT_TO_TAROT,
+        payload=TAROT_TRANSFER_PAYMENT_PAYLOAD,
+        payment_id=transfer_payment_id,
+        status="transfer_processing",
+    )
+    if payment_row_id is None:
+        await safe_send_message(
+            bot,
+            user_id,
+            "Этот перевод уже обрабатывается или уже выполнен.",
+            user_repo,
+        )
+        return
+
+    if callback.message:
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
 
     try:
         source_after, target_after = await transfer_karma_to_tarot_by_user_id(
@@ -140,7 +222,9 @@ async def transfer_tarot_karma_callback(
             user_id=user_id,
             amount=TRANSFER_AMOUNT_TO_TAROT,
         )
+        await payment_repo.update_status(transfer_payment_id, "succeeded")
     except TarotDbNotConfiguredError:
+        await payment_repo.update_status(transfer_payment_id, "failed")
         await safe_send_message(
             bot,
             user_id,
@@ -149,6 +233,7 @@ async def transfer_tarot_karma_callback(
         )
         return
     except SourceUserNotFoundError:
+        await payment_repo.update_status(transfer_payment_id, "failed")
         await safe_send_message(
             bot,
             user_id,
@@ -157,6 +242,7 @@ async def transfer_tarot_karma_callback(
         )
         return
     except TargetUserNotFoundError:
+        await payment_repo.update_status(transfer_payment_id, "failed")
         await safe_send_message(
             bot,
             user_id,
@@ -168,6 +254,7 @@ async def transfer_tarot_karma_callback(
         )
         return
     except InsufficientKarmaError as exc:
+        await payment_repo.update_status(transfer_payment_id, "failed")
         await safe_send_message(
             bot,
             user_id,
@@ -180,6 +267,7 @@ async def transfer_tarot_karma_callback(
         )
         return
     except Exception:
+        await payment_repo.update_status(transfer_payment_id, "failed")
         await safe_send_message(
             bot,
             user_id,
@@ -208,7 +296,8 @@ async def transfer_tarot_karma_callback(
             (
                 "🔁 <b>Перенос кармы в @rus_tarot_bot</b>\n"
                 f"User: <a href='tg://user?id={user_id}'>{user_id}</a>\n"
-                f"Сумма: {TRANSFER_AMOUNT_TO_TAROT} ✨"
+                f"Сумма: {TRANSFER_AMOUNT_TO_TAROT} ✨\n"
+                f"Transaction: <code>{transfer_payment_id}</code>"
             ),
         )
     except Exception:

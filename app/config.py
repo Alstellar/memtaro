@@ -56,6 +56,9 @@ class BotSettings(BaseSettings):
         if isinstance(value, list):
             return [int(item) for item in value]
 
+        if isinstance(value, int):
+            return [value]
+
         if isinstance(value, str):
             raw = value.strip()
             if not raw:
