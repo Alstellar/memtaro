@@ -1,69 +1,91 @@
-# handlers/user/marketplace.py
 import asyncio
+
 import asyncpg
-from aiogram import Router, F, Bot
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, \
-    CallbackQuery
+from aiogram import Bot, F, Router
 from aiogram.enums import ChatType
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    Message,
+    ReplyKeyboardMarkup,
+)
 
 from app.config import settings
-from app.services.safe_sender import safe_send_message
+from app.services.karma_transfer_service import (
+    InsufficientKarmaError,
+    SourceUserNotFoundError,
+    TargetUserNotFoundError,
+    TarotDbNotConfiguredError,
+    TRANSFER_AMOUNT_TO_TAROT,
+    transfer_karma_to_tarot_by_user_id,
+)
 from app.services.payment_service import create_yookassa_payment, spawn_payment_check
+from app.services.safe_sender import safe_send_message
 from db.db_payments import PaymentRepo
-from db.db_users import UserRepo
+from db.db_settings import SettingsRepo
 from db.db_statistics import StatisticsRepo
-from db.db_settings import SettingsRepo  # 👈 Добавлен импорт
+from db.db_users import UserRepo
 
 router = Router()
 router.message.filter(F.chat.type == ChatType.PRIVATE)
 
-# 💰 СТАТИЧЕСКАЯ КАРТА (КАРМА -> КЛЮЧИ НАСТРОЕК)
 KARMA_PACKAGES_MAP = {
     100: "pack_100_karma_price",
     500: "pack_500_karma_price",
     1000: "pack_1000_karma_price",
 }
-# ❌ УДАЛЕНЫ hardcoded PREMIUM_PRICE
+
+TAROT_PRODUCT_BUTTON = "🪬 Карма для @rus_tarot_bot"
+TAROT_TRANSFER_CALLBACK = "transfer_tarot_1000"
 
 
 @router.message(F.text == "🏪 Маркетплейс")
-async def marketplace_menu(message: Message, bot: Bot, user_repo):
+async def marketplace_menu(message: Message, bot: Bot, user_repo: UserRepo):
+    """Показывает главное меню маркетплейса."""
     kb = ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="💳 Подписка"), KeyboardButton(text="✨ Купить карму")],
-            [KeyboardButton(text="🏠 Главное меню")]
+            [KeyboardButton(text=TAROT_PRODUCT_BUTTON)],
+            [KeyboardButton(text="🏠 Главное меню")],
         ],
-        resize_keyboard=True
+        resize_keyboard=True,
     )
-    await safe_send_message(bot, message.chat.id, "<b>🏪 Маркетплейс</b>\n\nВыберите категорию:", user_repo,
-                            reply_markup=kb)
+    await safe_send_message(
+        bot,
+        message.chat.id,
+        "<b>🏪 Маркетплейс</b>\n\nВыберите категорию:",
+        user_repo,
+        reply_markup=kb,
+    )
 
 
 @router.message(F.text == "✨ Купить карму")
-async def buy_karma_menu(message: Message, bot: Bot, user_repo,
-                         settings_repo: SettingsRepo):
-
-    # 1. Генерируем текст списка цен динамически
+async def buy_karma_menu(
+    message: Message,
+    bot: Bot,
+    user_repo: UserRepo,
+    settings_repo: SettingsRepo,
+):
+    """Показывает список рублевых пакетов кармы."""
     price_lines = []
     buttons = []
     row = []
 
     for amount, setting_key in KARMA_PACKAGES_MAP.items():
         price_rub = await settings_repo.get_setting_value(setting_key, 0)
-
-        # Добавляем строчку в текст
         price_lines.append(f"• <b>{amount} ✨</b> — {price_rub} ₽")
 
-        # Добавляем кнопку
         row.append(KeyboardButton(text=f"Купить {amount} ✨"))
         if len(row) == 2:
             buttons.append(row)
             row = []
+
     if row:
         buttons.append(row)
 
     prices_str = "\n".join(price_lines)
-
     text = (
         "<b>✨ Пополнение баланса</b>\n\n"
         "Выберите пакет кармы:\n"
@@ -72,25 +94,139 @@ async def buy_karma_menu(message: Message, bot: Bot, user_repo,
     )
 
     buttons.append([KeyboardButton(text="🏪 Маркетплейс")])
-
     kb = ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
-
     await safe_send_message(bot, message.chat.id, text, user_repo, reply_markup=kb)
 
 
-# --- ОБРАБОТКА ПОКУПКИ КАРМЫ (РУБЛИ) ---
+@router.message(F.text == TAROT_PRODUCT_BUTTON)
+async def tarot_transfer_product_card(message: Message, bot: Bot, user_repo: UserRepo):
+    """Показывает карточку товара для переноса 1000 кармы в @rus_tarot_bot."""
+    text = (
+        "<b>🪬 Карма для @rus_tarot_bot</b>\n\n"
+        "Вы можете перенести карму из текущего бота в бота "
+        "<a href='https://t.me/rus_tarot_bot'>Таро | Гороскоп</a>.\n"
+        "В нем карма используется для получения раскладов Таро.\n\n"
+        f"Доступно для перевода: <b>{TRANSFER_AMOUNT_TO_TAROT} ✨</b>."
+    )
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=f"Перенести {TRANSFER_AMOUNT_TO_TAROT} ✨",
+                    callback_data=TAROT_TRANSFER_CALLBACK,
+                )
+            ]
+        ]
+    )
+    await safe_send_message(bot, message.chat.id, text, user_repo, reply_markup=kb)
+
+
+@router.callback_query(F.data == TAROT_TRANSFER_CALLBACK)
+async def transfer_tarot_karma_callback(
+    callback: CallbackQuery,
+    bot: Bot,
+    pool: asyncpg.Pool,
+    tarot_pool: asyncpg.Pool | None,
+    user_repo: UserRepo,
+):
+    """Выполняет перенос фиксированных 1000 кармы между проектами."""
+    await callback.answer()
+    user_id = callback.from_user.id
+
+    try:
+        source_after, target_after = await transfer_karma_to_tarot_by_user_id(
+            source_pool=pool,
+            tarot_pool=tarot_pool,
+            user_id=user_id,
+            amount=TRANSFER_AMOUNT_TO_TAROT,
+        )
+    except TarotDbNotConfiguredError:
+        await safe_send_message(
+            bot,
+            user_id,
+            "Перенос временно недоступен: не настроено подключение к БД @rus_tarot_bot.",
+            user_repo,
+        )
+        return
+    except SourceUserNotFoundError:
+        await safe_send_message(
+            bot,
+            user_id,
+            "Ваш профиль в текущем боте не найден. Напишите /start и попробуйте снова.",
+            user_repo,
+        )
+        return
+    except TargetUserNotFoundError:
+        await safe_send_message(
+            bot,
+            user_id,
+            (
+                "Профиль в @rus_tarot_bot не найден.\n"
+                "Сначала запустите @rus_tarot_bot командой /start, затем повторите перенос."
+            ),
+            user_repo,
+        )
+        return
+    except InsufficientKarmaError as exc:
+        await safe_send_message(
+            bot,
+            user_id,
+            (
+                f"Недостаточно кармы для перевода.\n"
+                f"Нужно: <b>{exc.required_amount} ✨</b>\n"
+                f"У вас: <b>{exc.current_balance} ✨</b>"
+            ),
+            user_repo,
+        )
+        return
+    except Exception:
+        await safe_send_message(
+            bot,
+            user_id,
+            "Не удалось выполнить перенос. Попробуйте чуть позже.",
+            user_repo,
+        )
+        return
+
+    await safe_send_message(
+        bot,
+        user_id,
+        (
+            "✅ Перевод выполнен успешно!\n\n"
+            f"Списано в текущем боте: <b>{TRANSFER_AMOUNT_TO_TAROT} ✨</b>\n"
+            "Начислено в @rus_tarot_bot: "
+            f"<b>{TRANSFER_AMOUNT_TO_TAROT} ✨</b>\n\n"
+            f"Ваш баланс здесь: <b>{source_after} ✨</b>\n"
+            f"Баланс в @rus_tarot_bot: <b>{target_after} ✨</b>"
+        ),
+        user_repo,
+    )
+
+    try:
+        await bot.send_message(
+            settings.bot.LOG_GROUP_ID,
+            (
+                "🔁 <b>Перенос кармы в @rus_tarot_bot</b>\n"
+                f"User: <a href='tg://user?id={user_id}'>{user_id}</a>\n"
+                f"Сумма: {TRANSFER_AMOUNT_TO_TAROT} ✨"
+            ),
+        )
+    except Exception:
+        pass
+
 
 @router.message(F.text.startswith("Купить"))
 async def process_karma_rub_payment(
-        message: Message,
-        bot: Bot,
-        pool: asyncpg.Pool,
-        user_repo: UserRepo,
-        payment_repo: PaymentRepo,
-        stats_repo: StatisticsRepo,
-        settings_repo: SettingsRepo,
-        payment_task_registry: set[asyncio.Task] | None = None,
+    message: Message,
+    bot: Bot,
+    pool: asyncpg.Pool,
+    user_repo: UserRepo,
+    payment_repo: PaymentRepo,
+    stats_repo: StatisticsRepo,
+    settings_repo: SettingsRepo,
+    payment_task_registry: set[asyncio.Task] | None = None,
 ):
+    """Создает платеж в рублях на покупку кармы через YooKassa."""
     user_id = message.from_user.id
 
     try:
@@ -104,7 +240,7 @@ async def process_karma_rub_payment(
 
     price_rub = await settings_repo.get_setting_value(setting_key, 0)
     if not price_rub:
-        await safe_send_message(bot, user_id, "Ошибка: Цена не найдена в настройках.", user_repo)
+        await safe_send_message(bot, user_id, "Ошибка: цена не найдена в настройках.", user_repo)
         return
 
     description = f"Покупка {amount_karma} кармы (User {user_id})"
@@ -116,7 +252,7 @@ async def process_karma_rub_payment(
         amount=price_rub,
         payload=payload,
         payment_id=payment_id,
-        status="pending"
+        status="pending",
     )
     if payment_row_id is None:
         await safe_send_message(
@@ -133,20 +269,26 @@ async def process_karma_rub_payment(
             f"🧾 <b>Создан инвойс (Karma)</b>\n"
             f"User: {message.from_user.full_name} (ID: <code>{user_id}</code>)\n"
             f"Товар: {amount_karma} ✨\n"
-            f"Сумма: {price_rub} ₽"
+            f"Сумма: {price_rub} ₽",
         )
     except Exception:
         pass
 
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"Оплатить {price_rub}₽", url=pay_url)]
-    ])
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text=f"Оплатить {price_rub}₽", url=pay_url)]]
+    )
 
     await safe_send_message(
-        bot, user_id,
-        f"Счет на оплату создан!\n\nТовар: <b>{amount_karma} ✨</b>\nСумма: <b>{price_rub} ₽</b>\n\nПосле оплаты карма начислится автоматически в течение нескольких минут!",
+        bot,
+        user_id,
+        (
+            "Счет на оплату создан!\n\n"
+            f"Товар: <b>{amount_karma} ✨</b>\n"
+            f"Сумма: <b>{price_rub} ₽</b>\n\n"
+            "После оплаты карма начислится автоматически в течение нескольких минут!"
+        ),
         user_repo,
-        reply_markup=kb
+        reply_markup=kb,
     )
 
     spawn_payment_check(
@@ -164,46 +306,50 @@ async def process_karma_rub_payment(
     )
 
 
-# --- ОБРАБОТКА ПОДПИСКИ (РУБЛИ) ---
-
 @router.message(F.text == "💳 Подписка")
-async def buy_subscription_menu(message: Message, bot: Bot, user_repo, settings_repo: SettingsRepo):
-
-    # 👇 Фетчим цену и множитель для описания
+async def buy_subscription_menu(
+    message: Message,
+    bot: Bot,
+    user_repo: UserRepo,
+    settings_repo: SettingsRepo,
+):
+    """Показывает карточку премиум-подписки."""
     price = await settings_repo.get_setting_value("sub_30d_price", 99)
     daily_bonus = await settings_repo.get_setting_value("bonus_premium_daily_karma", 50)
-    premium_mult = await settings_repo.get_setting_value("mult_premium_karma", 2) # 👈 ФЕТЧИМ МНОЖИТЕЛЬ
+    premium_mult = await settings_repo.get_setting_value("mult_premium_karma", 2)
 
     text = (
         "<b>💳 Премиум подписка (30 дней)</b>\n\n"
         "🔥 <b>Что дает:</b>\n"
         f"• +{daily_bonus} кармы ежедневно\n"
-        f"• х{premium_mult}✨ награды за всё\n\n" # 👈 ИСПОЛЬЗУЕМ ДИНАМИЧЕСКИЙ МНОЖИТЕЛЬ
+        f"• x{premium_mult}✨ награды за всё\n\n"
         f"<b>Цена: {price} ₽</b>"
     )
 
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"Оформить за {price} ₽", callback_data="buy_premium_rub")]
-    ])
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=f"Оформить за {price} ₽", callback_data="buy_premium_rub")]
+        ]
+    )
     await safe_send_message(bot, message.chat.id, text, user_repo, reply_markup=kb)
 
 
 @router.callback_query(F.data == "buy_premium_rub")
 async def process_premium_rub_payment(
-        callback: CallbackQuery,
-        bot: Bot,
-        pool: asyncpg.Pool,
-        user_repo: UserRepo,
-        payment_repo: PaymentRepo,
-        stats_repo: StatisticsRepo,
-        settings_repo: SettingsRepo,
-        payment_task_registry: set[asyncio.Task] | None = None,
+    callback: CallbackQuery,
+    bot: Bot,
+    pool: asyncpg.Pool,
+    user_repo: UserRepo,
+    payment_repo: PaymentRepo,
+    stats_repo: StatisticsRepo,
+    settings_repo: SettingsRepo,
+    payment_task_registry: set[asyncio.Task] | None = None,
 ):
+    """Создает платеж в рублях на премиум-подписку через YooKassa."""
     await callback.answer()
     user_id = callback.from_user.id
 
     price_rub = await settings_repo.get_setting_value("sub_30d_price", 99)
-
     description = f"Премиум подписка 30 дней (User {user_id})"
     pay_url, payment_id = await create_yookassa_payment(price_rub, description, user_id)
 
@@ -213,7 +359,7 @@ async def process_premium_rub_payment(
         amount=price_rub,
         payload=payload,
         payment_id=payment_id,
-        status="pending"
+        status="pending",
     )
     if payment_row_id is None:
         await safe_send_message(
@@ -230,20 +376,25 @@ async def process_premium_rub_payment(
             f"🧾 <b>Создан инвойс (Sub)</b>\n"
             f"User: {callback.from_user.full_name} (ID: <code>{user_id}</code>)\n"
             f"Товар: Premium 30 days\n"
-            f"Сумма: {price_rub} ₽"
+            f"Сумма: {price_rub} ₽",
         )
     except Exception:
         pass
 
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"Оплатить {price_rub}₽", url=pay_url)]
-    ])
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text=f"Оплатить {price_rub}₽", url=pay_url)]]
+    )
 
     await safe_send_message(
-        bot, user_id,
-        f"Счет на оплату создан!\n\nТовар: <b>Премиум 30 дней</b>\nСумма: <b>{price_rub} ₽</b>",
+        bot,
+        user_id,
+        (
+            "Счет на оплату создан!\n\n"
+            "Товар: <b>Премиум 30 дней</b>\n"
+            f"Сумма: <b>{price_rub} ₽</b>"
+        ),
         user_repo,
-        reply_markup=kb
+        reply_markup=kb,
     )
 
     spawn_payment_check(

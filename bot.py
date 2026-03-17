@@ -1,8 +1,8 @@
-# bot.py
 import asyncio
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ParseMode
 from loguru import logger
 
@@ -10,7 +10,7 @@ from app.config import settings
 from app.logging_setup import setup_logging
 from app.scheduler.setup import setup_scheduler
 from app.services.payment_service import restore_pending_payment_watchers
-from db.connection import create_pool
+from db.connection import create_pool, create_tarot_pool
 from db.db_activity import ActivityRepo
 from db.db_bot_images import BotImageRepo
 from db.db_chats import ChatRepo
@@ -26,14 +26,25 @@ from handlers import register_all_handlers
 
 
 async def main() -> None:
+    """Инициализирует инфраструктуру и запускает polling бота."""
     setup_logging()
 
     pool = await create_pool()
+    tarot_pool = await create_tarot_pool()
     await create_tables(pool)
+
+    proxy_url = settings.bot.build_proxy_url()
+    if proxy_url:
+        logger.info(f"Запуск через proxy: {settings.bot.masked_proxy_url()}")
+        bot_session = AiohttpSession(proxy=proxy_url)
+    else:
+        logger.info("Запуск без proxy.")
+        bot_session = None
 
     bot = Bot(
         token=settings.bot.BOT_TOKEN.get_secret_value(),
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+        session=bot_session,
     )
     dp = Dispatcher()
 
@@ -48,6 +59,7 @@ async def main() -> None:
     payment_task_registry: set[asyncio.Task] = set()
 
     dp["pool"] = pool
+    dp["tarot_pool"] = tarot_pool
     dp["bot_settings"] = settings.bot
     dp["user_repo"] = user_repo
     dp["image_repo"] = image_repo
@@ -94,6 +106,9 @@ async def main() -> None:
             payment_task_registry.clear()
 
         await pool.close()
+        if tarot_pool is not None:
+            await tarot_pool.close()
+
         await bot.session.close()
         logger.info("Бот остановлен.")
 
